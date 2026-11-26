@@ -13,9 +13,12 @@ public class PipecatDemo : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] {
+			"AssetRegistry",
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"HeadMountedDisplay",
+			"InputCore",
 			"Json",
 			"Pipecat",
 			"ProceduralMeshComponent",
