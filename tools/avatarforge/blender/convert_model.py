@@ -89,8 +89,27 @@ def head_w(obj, name):
     return obj.matrix_world @ obj.pose.bones[name].head
 
 
+ARM_ANGLE = job.get("arm_angle")        # degrees below horizontal for the upper arms, or None = the mannequin's own arm directions
+
+
 def a_pose(obj, names):
-    """names: slot -> bone name on obj. Rotate the arm chains to the mannequin's directions."""
+    """names: slot -> bone name on obj. Rotate the arms: to ARM_ANGLE below horizontal if set (only the upper arm turns; the
+    forearm and hand follow, so the elbow bend is kept), else every segment to the mannequin's directions."""
+    if ARM_ANGLE is not None:
+        rad = math.radians(float(ARM_ANGLE))
+        for sfx in ("_l", "_r"):
+            try:
+                up, fo = names["upperarm" + sfx], names["lowerarm" + sfx]
+            except KeyError:
+                report["warnings"].append("arm chain incomplete on side %s: arm angle step skipped there" % sfx)
+                continue
+            cur = head_w(obj, fo) - head_w(obj, up)
+            hz = Vector((cur.x, cur.y, 0.0))
+            if hz.length < 1e-4:
+                continue
+            tgt = hz.normalized() * math.cos(rad) + Vector((0.0, 0.0, -math.sin(rad)))
+            aim(obj, up, cur, tgt)
+        return
     for sfx in ("_l", "_r"):
         try:
             up, fo, ha = (names[b + sfx] for b in ("upperarm", "lowerarm", "hand"))
@@ -335,7 +354,7 @@ if static:
         m.parent = arm
         m.matrix_parent_inverse = Matrix.Identity(4)
 
-EXT_PREFIX = ("hand_", "thumb_", "index_", "middle_", "ring_", "pinky_", "foot_", "ball_")
+EXT_PREFIX = ("hand_", "thumb_", "index_", "middle_", "ring_", "pinky_", "foot_", "ball_", "thigh_", "calf_")
 
 
 def ext_weight(mesh, v, names):
@@ -347,12 +366,12 @@ if BF and static:
     spec_mats = {mt["name"]: mt for mt in job.get("materials", [])}
     target = max(static, key=lambda m: len(m.data.vertices))
     # the reference body, reshaped onto the target (hands and feet are NOT trusted: different anatomy)
-    kb, ov = reshape_reference_body(BF, target, P0, spec_mats, Q, DEFORM, out_dir, C.log)
+    kb, ov = reshape_reference_body(BF, target, TMP_JOINTS or P0, spec_mats, Q, DEFORM, out_dir, C.log)
     # the reference loses its hands and feet ...
     kn = {g.index: g.name for g in kb.vertex_groups}
     bm = bmesh.new()
     bm.from_mesh(kb.data)
-    drop = [v for v in bm.verts if ext_weight(kb, kb.data.vertices[v.index], kn) > 0.5]
+    drop = [v for v in bm.verts if ext_weight(kb, kb.data.vertices[v.index], kn) > 0.7]
     bmesh.ops.delete(bm, geom=drop, context="VERTS")
     bm.to_mesh(kb.data)
     bm.free()
@@ -365,7 +384,7 @@ if BF and static:
     tn = {g.index: g.name for g in piece.vertex_groups}
     bm = bmesh.new()
     bm.from_mesh(piece.data)
-    drop = [v for v in bm.verts if ext_weight(piece, piece.data.vertices[v.index], tn) < 0.3]
+    drop = [v for v in bm.verts if ext_weight(piece, piece.data.vertices[v.index], tn) < 0.4]
     bmesh.ops.delete(bm, geom=drop, context="VERTS")
     bm.normal_update()
     for v in bm.verts:
@@ -382,7 +401,7 @@ if BF and static:
     report.setdefault("extra_materials", []).append(
         {"name": ov["material"], "base": ov["png"], "normal": None, "rough": None, "metal": None, "alpha_mode": "opaque",
          "two_sided": False, "class": "skin"})
-    report["warnings"].append("body = reshaped reference body (its weights, UVs, jiggle) + the model's own hands and feet")
+    report["warnings"].append("body = reshaped reference body (its weights, UVs, jiggle) + the model's own hands, legs and feet")
 skinned = [m for m in meshes if m not in static and m.name not in PREMAPPED]
 # ---- 1. arms of the source skeleton to the mannequin's A-pose, bake into the skinned meshes ---------------------------------------
 if skinned and job.get("pose_arms", True):

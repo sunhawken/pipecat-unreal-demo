@@ -209,7 +209,7 @@ class Pipeline:
         fbx = os.path.join(out, f"{self.name}_OnMannequin.fbx")
         job = {"source": self.source, "armature": self.state.get("armature"), "out_fbx": fbx, "out_dir": out,
                "mannequin": MANNEQUIN_JSON, "rotation": plan["rotation"], "scale": plan["scale"],
-               "body_from": self.state["options"].get("body_from"), "parts": self.state.get("parts_override"), "mapping": {k: v["bone"] for k, v in m.slots.items()}, "weight_map": BM.weight_map(ins["bones"], m),
+               "body_from": self.state["options"].get("body_from"), "arm_angle": self.state["options"].get("arm_angle"), "parts": self.state.get("parts_override"), "mapping": {k: v["bone"] for k, v in m.slots.items()}, "weight_map": BM.weight_map(ins["bones"], m),
                "materials": plan["materials"], "preview": self.state["options"].get("preview", True),
                "preview_dir": os.path.join(out, "preview"), "pose_arms": self.state["options"].get("pose_arms", True)}
         self._blender("convert_model.py", job, "convert")
