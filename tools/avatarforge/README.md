@@ -55,6 +55,21 @@ Real exports are rarely clean. AvatarForge handles:
   the trunk, the pelvis height above the floor for the legs, the arm length for the arms. No hand bone? The wrist joint is used.
 * **Wrong orientation or units** - Y-up, lying on its back, millimetres or metres: orientation and scale come from the joints.
 
+## Borrowing a well-skinned body (`body_from`)
+
+Automatic weights are good, not perfect. For a static body the tool can instead **reshape a reference body that already
+deforms well** (e.g. the Kalina avatar: her game weights, UV layout and jiggle bones) so it takes the target's shape and look
+(`options.body_from = {"fbx": ".../Kalina_OnMannequin.fbx", "mesh": "Body", "label": "Kalina"}`, `blender/reshape_body.py`):
+
+1. the reference skeleton is posed onto the target's joints (its own weights deform it);
+2. its head part is cut off (the model's own face/hair cover it);
+3. it is wrapped onto the target's surface in smoothed passes (seam-safe; vertex order, UVs and weights stay untouched);
+4. the target's colour is baked onto the reference's own UV layout (Cycles, a new material `<name>_KalinaUV`);
+5. **hands and feet are not borrowed** (different anatomy collapses fingers and boots): the reference loses them and the target
+   keeps its own hands and feet, with their original texture and automatic weights.
+
+The result animates as well as the reference does (no seam cracks, her jiggle weights) while looking like the target.
+
 ## Is the shape 1:1?
 
 Every conversion ends with a **shape check**: each vertex is compared with where the model had it (upright, in cm).

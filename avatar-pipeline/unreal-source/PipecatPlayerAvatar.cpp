@@ -80,8 +80,11 @@ void UPipecatPlayerAvatar::BeginPlay()
 	{
 		if (USpringArmComponent* Boom = Character->FindComponentByClass<USpringArmComponent>())
 		{
-			Boom->TargetArmLength = 320.0f;
-			Boom->SocketOffset = FVector(0.0f, 0.0f, 20.0f);
+			float Zoom = 320.0f, Lift = 20.0f;
+			FParse::Value(FCommandLine::Get(), TEXT("PipecatAvatarZoom="), Zoom);   // test aid: camera distance (cm)
+			FParse::Value(FCommandLine::Get(), TEXT("PipecatAvatarLift="), Lift);   // test aid: camera height offset (cm)
+			Boom->TargetArmLength = Zoom;
+			Boom->SocketOffset = FVector(0.0f, 0.0f, Lift);
 		}
 		PreviewYaw = Character->GetActorRotation().Yaw + 180.0f;
 	}

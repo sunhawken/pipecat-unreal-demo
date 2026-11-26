@@ -209,12 +209,13 @@ class Pipeline:
         fbx = os.path.join(out, f"{self.name}_OnMannequin.fbx")
         job = {"source": self.source, "armature": self.state.get("armature"), "out_fbx": fbx, "out_dir": out,
                "mannequin": MANNEQUIN_JSON, "rotation": plan["rotation"], "scale": plan["scale"],
-               "parts": self.state.get("parts_override"), "mapping": {k: v["bone"] for k, v in m.slots.items()}, "weight_map": BM.weight_map(ins["bones"], m),
+               "body_from": self.state["options"].get("body_from"), "parts": self.state.get("parts_override"), "mapping": {k: v["bone"] for k, v in m.slots.items()}, "weight_map": BM.weight_map(ins["bones"], m),
                "materials": plan["materials"], "preview": self.state["options"].get("preview", True),
                "preview_dir": os.path.join(out, "preview"), "pose_arms": self.state["options"].get("pose_arms", True)}
         self._blender("convert_model.py", job, "convert")
         rep = json.load(open(os.path.join(out, "convert.json"), encoding="utf-8"))
         self.state["convert"] = {"fbx": fbx, "report": rep, "preview_dir": job["preview_dir"]}
+        self.state["convert_material_overrides"] = rep.get("material_overrides", {})
         self.save()
         st = rep["stats"]
         self.log(f"   height {st['height_cm']:.0f} cm, {st['vertices']} vertices, frame deviation {st['worst_frame_deviation']:.1e}, "
@@ -244,7 +245,9 @@ class Pipeline:
         if os.path.exists(result):
             os.remove(result)
         job = {"fbx": conv["fbx"], "dest": f"{dest_root}/{self.name}", "name": f"SK_{self.name}", "skeleton": SKELETON_ASSET,
-               "mannequin": MANNEQUIN_JSON, "materials": self.state["plan"]["materials"], "result": result}
+               "mannequin": MANNEQUIN_JSON, "result": result,
+               "materials": [{**m, **self.state.get("convert_material_overrides", {}).get(m["name"], {})} for m in self.state["plan"]["materials"]]
+               + self.state.get("convert", {}).get("report", {}).get("extra_materials", [])}
         jp = os.path.join(self.workdir, "job_ue.json")
         json.dump(job, open(jp, "w", encoding="utf-8"), indent=1)
         env = dict(os.environ, AVATARFORGE_JOB=jp)

@@ -34,6 +34,7 @@ from mathutils.geometry import intersect_point_line
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import af_common as C  # noqa: E402
+from reshape_body import reshape_reference_body  # noqa: E402
 
 job, _ = C.job_from_argv()
 out_dir = job["out_dir"]
@@ -257,18 +258,54 @@ skinned = [m for m in meshes if m not in static]
 bpy.context.view_layer.update()
 KH0 = {b.name: arm.matrix_world @ b.head_local for b in arm.data.bones}
 TMP_JOINTS = {}
+PREMAPPED = set()
+BF = job.get("body_from")
 if static:
     report["warnings"].append("%d mesh(es) had no skin weights (%s): rigged automatically" % (len(static), ", ".join(m.name for m in static)))
     if "pelvis" not in MAP or "head" not in MAP:
         raise RuntimeError("pelvis and head must be mapped to rig a static body")
     P0, _, _ = place_joints(known_from(KH0), chain_points(KH0))
     tmp = make_armature("AF_tmp", P0, DEFORM)
-    bpy.ops.object.select_all(action="DESELECT")
+    # Heat weighting treats every UV/normal-split shell as a separate solid, so vertices that sit at the same spot but were
+    # split (seams) get different weights and tear apart when posed. Weight a WELDED copy instead, then give every original
+    # vertex the weights of its welded twin.
+    import bmesh
+    from mathutils import kdtree
     for m in static:
-        m.select_set(True)
-    tmp.select_set(True)
-    bpy.context.view_layer.objects.active = tmp
-    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        w = m.copy()
+        w.data = m.data.copy()
+        bpy.context.scene.collection.objects.link(w)
+        for mod in list(w.modifiers):
+            w.modifiers.remove(mod)
+        bm = bmesh.new()
+        bm.from_mesh(w.data)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-3)      # 0.01 mm (the model is in cm)
+        bm.to_mesh(w.data)
+        bm.free()
+        bpy.ops.object.select_all(action="DESELECT")
+        w.select_set(True)
+        tmp.select_set(True)
+        bpy.context.view_layer.objects.active = tmp
+        bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+        wnames = {g.index: g.name for g in w.vertex_groups}
+        kd = kdtree.KDTree(len(w.data.vertices))
+        for v in w.data.vertices:
+            kd.insert(v.co, v.index)
+        kd.balance()
+        for g in list(m.vertex_groups):
+            m.vertex_groups.remove(g)
+        mgroups = {}
+        for v in m.data.vertices:
+            _, wi, _ = kd.find(v.co)
+            for ge in w.data.vertices[wi].groups:
+                n = wnames[ge.group]
+                if ge.weight > 1e-4:
+                    (mgroups.get(n) or mgroups.setdefault(n, m.vertex_groups.new(name=n))).add([v.index], ge.weight, "REPLACE")
+        report["stats"]["static_welded_vertices"] = report["stats"].get("static_welded_vertices", 0) + (len(m.data.vertices) - len(w.data.vertices))
+        bpy.data.objects.remove(w, do_unlink=True)
+        mod = m.modifiers.new("Armature", "ARMATURE")
+        mod.object = tmp
+        m.parent = tmp
     # anything the heat solver left without weight: nearest bone segment
     seg = [(n, tmp.data.bones[n].head_local.copy(), tmp.data.bones[n].tail_local.copy()) for n in DEFORM]
 
@@ -298,6 +335,55 @@ if static:
         m.parent = arm
         m.matrix_parent_inverse = Matrix.Identity(4)
 
+EXT_PREFIX = ("hand_", "thumb_", "index_", "middle_", "ring_", "pinky_", "foot_", "ball_")
+
+
+def ext_weight(mesh, v, names):
+    return sum(ge.weight for ge in v.groups if names.get(ge.group, "").startswith(EXT_PREFIX))
+
+
+if BF and static:
+    import bmesh
+    spec_mats = {mt["name"]: mt for mt in job.get("materials", [])}
+    target = max(static, key=lambda m: len(m.data.vertices))
+    # the reference body, reshaped onto the target (hands and feet are NOT trusted: different anatomy)
+    kb, ov = reshape_reference_body(BF, target, P0, spec_mats, Q, DEFORM, out_dir, C.log)
+    # the reference loses its hands and feet ...
+    kn = {g.index: g.name for g in kb.vertex_groups}
+    bm = bmesh.new()
+    bm.from_mesh(kb.data)
+    drop = [v for v in bm.verts if ext_weight(kb, kb.data.vertices[v.index], kn) > 0.5]
+    bmesh.ops.delete(bm, geom=drop, context="VERTS")
+    bm.to_mesh(kb.data)
+    bm.free()
+    kb.data.update()
+    # ... and the target keeps ONLY its own hands and feet (heat weights), nudged out a hair so they win the overlap band
+    piece = target.copy()
+    piece.data = target.data.copy()
+    piece.name = "Hands_Feet_" + target.name
+    bpy.context.scene.collection.objects.link(piece)
+    tn = {g.index: g.name for g in piece.vertex_groups}
+    bm = bmesh.new()
+    bm.from_mesh(piece.data)
+    drop = [v for v in bm.verts if ext_weight(piece, piece.data.vertices[v.index], tn) < 0.3]
+    bmesh.ops.delete(bm, geom=drop, context="VERTS")
+    bm.normal_update()
+    for v in bm.verts:
+        v.co += v.normal * 0.03
+    bm.to_mesh(piece.data)
+    bm.free()
+    piece.data.update()
+    for mod in list(piece.modifiers):
+        piece.modifiers.remove(mod)
+    static = [m for m in static if m is not target]
+    meshes = [m for m in meshes if m is not target] + [kb, piece]
+    bpy.data.objects.remove(target, do_unlink=True)
+    PREMAPPED.update([kb.name, piece.name])
+    report.setdefault("extra_materials", []).append(
+        {"name": ov["material"], "base": ov["png"], "normal": None, "rough": None, "metal": None, "alpha_mode": "opaque",
+         "two_sided": False, "class": "skin"})
+    report["warnings"].append("body = reshaped reference body (its weights, UVs, jiggle) + the model's own hands and feet")
+skinned = [m for m in meshes if m not in static and m.name not in PREMAPPED]
 # ---- 1. arms of the source skeleton to the mannequin's A-pose, bake into the skinned meshes ---------------------------------------
 if skinned and job.get("pose_arms", True):
     a_pose(arm, MAP)
@@ -335,9 +421,15 @@ for m in skinned:
                 acc = JIG.setdefault(n, [Vector(), 0.0])
                 acc[0] += m.data.vertices[vi].co * w
                 acc[1] += w
-for m in static:
+for m in [x for x in meshes if x in static or x.name in PREMAPPED]:
+    pn = {g.index: g.name for g in m.vertex_groups}
     for sv in m.data.vertices:
         stats["max_infl"] = max(stats["max_infl"], len(sv.groups))
+        for ge in sv.groups:
+            if pn[ge.group].startswith("jiggle_"):
+                acc = JIG.setdefault(pn[ge.group], [Vector(), 0.0])
+                acc[0] += sv.co * ge.weight
+                acc[1] += ge.weight
 report["stats"].update(max_influences=stats["max_infl"], vertices_without_weight=stats["zero"])
 C.log("weights: max influences/vertex %d, vertices with no weight %d" % (stats["max_infl"], stats["zero"]))
 
@@ -414,6 +506,8 @@ bpy.data.objects.remove(arm, do_unlink=True)
 # ---- 1:1 check: how far did every vertex move from where the model had it? --------------------------------------------------------------
 moved, worst, total, sum_d, by_part = 0, 0.0, 0, 0.0, {}
 for m in meshes:
+    if m.name not in ORIG:          # a replacement body (reshaped reference) has no authored original to compare with
+        continue
     pm = 0
     for v, o in zip(m.data.vertices, ORIG[m.name]):
         d = (v.co - o).length
@@ -456,6 +550,10 @@ if job.get("preview", True) and job.get("preview_dir"):
     if scn.world is None:
         scn.world = bpy.data.worlds.new("w")
     spec = {mt["name"]: mt for mt in job.get("materials", [])}
+    for _em in report.get("extra_materials", []):
+        spec[_em["name"]] = _em
+    for _n, _ov in report.get("material_overrides", {}).items():     # e.g. a texture baked onto a replacement body
+        spec[_n] = {**spec.get(_n, {}), **_ov}
     for m in meshes:
         for slot in m.material_slots:
             mat = slot.material
