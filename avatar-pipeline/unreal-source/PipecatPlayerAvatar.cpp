@@ -8,6 +8,8 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Misc/CommandLine.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Misc/Parse.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPipecatAvatar, Log, All);
@@ -24,7 +26,27 @@ void UPipecatPlayerAvatar::BeginPlay()
 	Super::BeginPlay();
 
 	Character = Cast<ACharacter>(GetOwner());
+
+	// An avatar made with toolsvatarforge is named in Config/PipecatAvatar.txt (one asset path); -PipecatAvatarMesh= overrides
+	// it. Otherwise the built-in default is used.
+	FString Chosen;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("PipecatAvatarMesh="), Chosen) || Chosen.IsEmpty())
+	{
+		FFileHelper::LoadFileToString(Chosen, *FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("PipecatAvatar.txt")));
+	}
+	Chosen = Chosen.TrimStartAndEnd().TrimQuotes();
+	if (!Chosen.IsEmpty())
+	{
+		Mesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(Chosen));
+		UE_LOG(LogPipecatAvatar, Log, TEXT("Avatar chosen by AvatarForge / command line: %s"), *Chosen);
+	}
 	USkeletalMesh* NewMesh = Mesh.LoadSynchronous();
+	if (!NewMesh && !Chosen.IsEmpty())
+	{
+		UE_LOG(LogPipecatAvatar, Warning, TEXT("Could not load %s; falling back to the default avatar"), *Chosen);
+		Mesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/KalinaMannequin/SK_Kalina_Mannequin.SK_Kalina_Mannequin")));
+		NewMesh = Mesh.LoadSynchronous();
+	}
 	if (!Character || !NewMesh)
 	{
 		UE_LOG(LogPipecatAvatar, Warning, TEXT("No character or no avatar mesh; keeping the default body"));

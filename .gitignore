@@ -27,3 +27,9 @@ pipecat/.venv/
 pipecat/.env
 pipecat/.envrc
 pipecat/__pycache__/
+
+# AvatarForge work files and the installed-avatar pointer
+avatars/
+__pycache__/
+*.pyc
+Config/PipecatAvatar.txt
